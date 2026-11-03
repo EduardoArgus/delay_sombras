@@ -226,7 +226,7 @@ if uploaded_files:
         initial_view_state=view_state,
         # Balão (tooltip) atualizado com as datas formatadas
         tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
-        map_style=None,
+        map_style="mapbox://styles/mapbox/satellite-streets-v12",
     )
 
     st.pydeck_chart(r)
