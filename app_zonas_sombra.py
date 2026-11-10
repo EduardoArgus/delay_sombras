@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pydeck as pdk
+import io
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 st.set_page_config(page_title="Zonas de Sombra - Telemetria", layout="wide")
 
@@ -14,7 +17,6 @@ def hex_to_rgb(hex_color):
     return list(int(hex_color[i:i+2], 16) for i in (0, 2, 4)) + [200]
 
 def corrigir_coordenada(val, limite):
-    """Corrige coordenadas que perderam o ponto decimal no Excel (ex: -19645227 -> -19.645227)"""
     if pd.isna(val) or val == 0:
         return np.nan
     try:
@@ -24,6 +26,76 @@ def corrigir_coordenada(val, limite):
     while abs(val) > limite:
         val /= 10.0
     return val
+
+def gerar_pdf_zonas_sombra(df_coord, rank_veic, rank_ev):
+    buffer = io.BytesIO()
+    
+    with PdfPages(buffer) as pdf:
+        # --- PÁGINA 1: MAPA DE CALOR E PONTOS CRÍTICOS ---
+        fig, ax = plt.subplots(figsize=(11, 8.5)) # Formato Paisagem
+        
+        if not df_coord.empty:
+            # Plota a densidade (Mapa de Calor ao fundo) + Pontos proporcionais ao Delay
+            hb = ax.hexbin(
+                df_coord['Longitude'], df_coord['Latitude'], 
+                C=df_coord['Delay_Minutos'], reduce_C_function=np.mean,
+                gridsize=30, cmap='YlOrRd', mincnt=1, alpha=0.85
+            )
+            cb = fig.colorbar(hb, ax=ax)
+            cb.set_label('Média de Delay (Minutos)')
+            
+            ax.set_title("Mapa de Calor de Latência (Zonas de Sombra)", fontsize=14, fontweight='bold')
+            ax.set_xlabel("Longitude")
+            ax.set_ylabel("Latitude")
+            ax.grid(True, linestyle='--', alpha=0.4)
+        else:
+            ax.text(0.5, 0.5, "Sem coordenadas válidas para gerar o mapa.", ha='center', va='center', fontsize=12)
+            
+        plt.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+        
+        # --- PÁGINA 2: TABELAS DE RANKING (TOP 15) ---
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8.5))
+        ax1.axis('off')
+        ax2.axis('off')
+        
+        ax1.set_title("Top 15 Veículos Mais Críticos", fontsize=12, fontweight='bold', loc='left')
+        if not rank_veic.empty:
+            # Pega as top 15 linhas e as colunas originais do dataframe de rank
+            top_veic = rank_veic.head(15).copy()
+            # Formata as colunas para o PDF ficar limpo
+            top_veic['Pct_Critico'] = top_veic['Pct_Critico'].astype(str) + "%"
+            
+            t1 = ax1.table(
+                cellText=top_veic.values,
+                colLabels=top_veic.columns,
+                loc='center', cellLoc='center'
+            )
+            t1.auto_set_font_size(False)
+            t1.set_fontsize(8)
+            t1.scale(1, 1.3)
+            
+        ax2.set_title("Top 15 Eventos Mais Críticos", fontsize=12, fontweight='bold', loc='left')
+        if not rank_ev.empty:
+            top_ev = rank_ev.head(15).copy()
+            top_ev['Pct_Critico'] = top_ev['Pct_Critico'].astype(str) + "%"
+            
+            t2 = ax2.table(
+                cellText=top_ev.values,
+                colLabels=top_ev.columns,
+                loc='center', cellLoc='center'
+            )
+            t2.auto_set_font_size(False)
+            t2.set_fontsize(8)
+            t2.scale(1, 1.3)
+            
+        plt.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+        
+    buffer.seek(0)
+    return buffer
 
 # --- BARRA LATERAL (Filtros, Upload e Regras) ---
 with st.sidebar:
@@ -256,7 +328,7 @@ if uploaded_files:
     r = pdk.Deck(
         layers=[camada_satelite, camada_bolhas],
         initial_view_state=view_state,
-        tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
+        tooltip={"text": "Fornecedor: {Fornecedor}\\nFrota: {Frota}\\nOperação: {Operação}\\nFaixa: {Categoria_Delay}\\nDelay: {Delay_Minutos} min\\nGerado em: {Data_Gerado}\\nChegou em: {Data_Chegada}"},
         map_style=None,
     )
 
@@ -268,6 +340,9 @@ if uploaded_files:
     
     cat_critica = todas_categorias[-1]
     col_rank_veic, col_rank_ev = st.columns(2)
+    
+    rank_veiculos = pd.DataFrame()
+    rank_eventos = pd.DataFrame()
     
     with col_rank_veic:
         st.markdown("**🚛 Veículos (Do Mais Crítico ao Mais Estável)**")
@@ -344,6 +419,20 @@ if uploaded_files:
             )
         else:
             st.info("Sem dados para exibir.")
+
+    # --- BOTÃO DE EXPORTAÇÃO PARA PDF ---
+    st.divider()
+    col_pdf1, col_pdf2 = st.columns([1, 2])
+    with col_pdf1:
+        if not df_filtrado.empty:
+            pdf_buffer = gerar_pdf_zonas_sombra(df_com_coord, rank_veiculos, rank_eventos)
+            st.download_button(
+                label="📥 Baixar Relatório (Mapa de Calor + Rankings PDF)",
+                data=pdf_buffer,
+                file_name="relatorio_zonas_sombra.pdf",
+                mime="application/pdf",
+                type="primary"
+            )
 
     # --- TABELA DE DADOS GERAIS ---
     st.divider()
