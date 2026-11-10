@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import pydeck as pdk
 
 st.set_page_config(page_title="Zonas de Sombra - Telemetria", layout="wide")
@@ -7,10 +8,22 @@ st.set_page_config(page_title="Zonas de Sombra - Telemetria", layout="wide")
 st.title("🚚 Dashboard de Zonas de Sombra e Latência")
 st.markdown("Faça o upload de MÚLTIPLAS bases (Pargus, FT-Cloud, Hat-Cloud) simultaneamente.")
 
-# --- FUNÇÃO AUXILIAR PARA CORES ---
+# --- FUNÇÕES AUXILIARES ---
 def hex_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
     return list(int(hex_color[i:i+2], 16) for i in (0, 2, 4)) + [200]
+
+def corrigir_coordenada(val, limite):
+    """Corrige coordenadas que perderam o ponto decimal no Excel (ex: -19645227 -> -19.645227)"""
+    if pd.isna(val) or val == 0:
+        return np.nan
+    try:
+        val = float(val)
+    except:
+        return np.nan
+    while abs(val) > limite:
+        val /= 10.0
+    return val
 
 # --- BARRA LATERAL (Filtros, Upload e Regras) ---
 with st.sidebar:
@@ -80,6 +93,8 @@ if uploaded_files:
             else:
                 temp_df = pd.read_excel(file)
             
+            # Limpa espaços extras nos nomes das colunas
+            temp_df.columns = temp_df.columns.str.strip()
             colunas = temp_df.columns.tolist()
             
             if 'Hora de completação de evidências' in colunas:
@@ -100,23 +115,41 @@ if uploaded_files:
                     'Alarm Time': 'Hora_alarme',
                     'Received Time': 'Hora_chegada_alarme'
                 })
-                if 'Latitude' not in temp_df.columns: temp_df['Latitude'] = None
-                if 'Longitude' not in temp_df.columns: temp_df['Longitude'] = None
                 temp_df['Fornecedor'] = 'HAT-CLOUD'
                 
-            elif 'Hora_chegada_alarme' in colunas:
+            elif 'Hora_chegada_alarme' in colunas or 'hora_chegada_alarme' in [c.lower() for c in colunas]:
+                # Padroniza variações de minúsculas/sem acento do PARGUS
+                mapa_pargus = {
+                    'operacao': 'Operação',
+                    'operação': 'Operação',
+                    'frota': 'Frota',
+                    'evento': 'Evento',
+                    'hora_alarme': 'Hora_alarme',
+                    'hora_chegada_alarme': 'Hora_chegada_alarme',
+                    'latitude': 'Latitude',
+                    'longitude': 'Longitude'
+                }
+                temp_df = temp_df.rename(columns=lambda c: mapa_pargus.get(c.lower(), c))
                 temp_df['Fornecedor'] = 'PARGUS'
             
+            # Garante que todas as colunas oficiais existam para evitar KeyError
             colunas_oficiais = ['Fornecedor', 'Operação', 'Frota', 'Evento', 'Hora_alarme', 'Hora_chegada_alarme', 'Latitude', 'Longitude']
-            col_existentes = [c for c in colunas_oficiais if c in temp_df.columns]
-            df_list.append(temp_df[col_existentes])
+            for col in colunas_oficiais:
+                if col not in temp_df.columns:
+                    temp_df[col] = np.nan if col in ['Latitude', 'Longitude', 'Hora_alarme', 'Hora_chegada_alarme'] else 'Não informado'
+                    
+            df_list.append(temp_df[colunas_oficiais])
             
         df = pd.concat(df_list, ignore_index=True)
         
-        # Convertendo para datetime e forçando o padrão brasileiro (dia antes do mês)
+        # Tratamento de Datas
         df['Hora_alarme'] = pd.to_datetime(df['Hora_alarme'], errors='coerce', dayfirst=True)
         df['Hora_chegada_alarme'] = pd.to_datetime(df['Hora_chegada_alarme'], errors='coerce', dayfirst=True)
         df = df.dropna(subset=['Hora_alarme', 'Hora_chegada_alarme'])
+        
+        # Tratamento de Coordenadas (corrige números gigantes sem casa decimal)
+        df['Latitude'] = df['Latitude'].apply(lambda x: corrigir_coordenada(x, 90))
+        df['Longitude'] = df['Longitude'].apply(lambda x: corrigir_coordenada(x, 180))
         
         # Cálculos de Delay (Minutos, Horas e Dias)
         df['Delay_Minutos'] = (df['Hora_chegada_alarme'] - df['Hora_alarme']).dt.total_seconds() / 60
@@ -126,31 +159,29 @@ if uploaded_files:
         
         df['Categoria_Delay'] = df['Delay_Minutos'].apply(get_categoria)
 
-    # --- NOVOS FILTROS (Com Data) ---
+    # --- FILTROS ---
     st.divider()
     
-    # Extrair datas mínima e máxima da base para o calendário
     min_date = df['Hora_alarme'].dt.date.min()
     max_date = df['Hora_alarme'].dt.date.max()
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        # Filtro de Data
         datas_selecionadas = st.date_input("Filtrar Período:", value=(min_date, max_date), min_value=min_date, max_value=max_date)
     with col2:
-        forns = st.multiselect("Filtrar Fornecedor:", options=df['Fornecedor'].unique(), default=df['Fornecedor'].unique())
+        forns = st.multiselect("Filtrar Fornecedor:", options=df['Fornecedor'].dropna().unique(), default=df['Fornecedor'].dropna().unique())
     with col3:
-        ops = st.multiselect("Filtrar Operação:", options=df['Operação'].unique(), default=df['Operação'].unique())
+        ops = st.multiselect("Filtrar Operação:", options=df['Operação'].dropna().unique(), default=df['Operação'].dropna().unique())
     with col4:
-        frotas = st.multiselect("Filtrar Frota:", options=df['Frota'].unique())
+        frotas = st.multiselect("Filtrar Frota:", options=df['Frota'].dropna().unique())
         
     df_filtrado = df.copy()
     
-    # Aplica o filtro de data (trata se o usuário selecionou só o começo ou o começo e fim)
-    if len(datas_selecionadas) == 2:
-        df_filtrado = df_filtrado[(df_filtrado['Hora_alarme'].dt.date >= datas_selecionadas[0]) & (df_filtrado['Hora_alarme'].dt.date <= datas_selecionadas[1])]
-    elif len(datas_selecionadas) == 1:
-        df_filtrado = df_filtrado[df_filtrado['Hora_alarme'].dt.date == datas_selecionadas[0]]
+    if isinstance(datas_selecionadas, tuple):
+        if len(datas_selecionadas) == 2:
+            df_filtrado = df_filtrado[(df_filtrado['Hora_alarme'].dt.date >= datas_selecionadas[0]) & (df_filtrado['Hora_alarme'].dt.date <= datas_selecionadas[1])]
+        elif len(datas_selecionadas) == 1:
+            df_filtrado = df_filtrado[df_filtrado['Hora_alarme'].dt.date == datas_selecionadas[0]]
         
     if forns: df_filtrado = df_filtrado[df_filtrado['Fornecedor'].isin(forns)]
     if ops: df_filtrado = df_filtrado[df_filtrado['Operação'].isin(ops)]
@@ -158,7 +189,6 @@ if uploaded_files:
 
     st.divider()
 
-    # --- CÁLCULO DAS PORCENTAGENS ---
     # --- CÁLCULO DAS PORCENTAGENS ---
     st.subheader("Distribuição de Latência (Geral da Seleção)")
     total_eventos = len(df_filtrado)
@@ -172,8 +202,10 @@ if uploaded_files:
                 label=cat, 
                 value=f"{pct:.1f}%", 
                 delta=f"{qtd} eventos", 
-                delta_color="off" # Desliga o verde/vermelho padrão do delta
+                delta_color="off"
             )
+
+    st.divider()
 
     # --- FILTRO MAPA ---
     df_mapa = df_filtrado[df_filtrado['Categoria_Delay'].isin(categorias_visiveis)].copy()
@@ -185,10 +217,8 @@ if uploaded_files:
             
     df_mapa['color'] = df_mapa['Delay_Minutos'].apply(aplicar_cor_dinamica)
     
-    # Separar os que tem coordenada dos que não tem e criar uma cópia limpa
     df_com_coord = df_mapa.dropna(subset=['Latitude', 'Longitude']).copy()
     
-    # Formatar as datas para aparecerem bonitas no mapa (padrão brasileiro)
     df_com_coord['Data_Gerado'] = df_com_coord['Hora_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     df_com_coord['Data_Chegada'] = df_com_coord['Hora_chegada_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
 
@@ -209,7 +239,7 @@ if uploaded_files:
         radius_max_pixels=15,
         line_width_min_pixels=1,
         get_position="[Longitude, Latitude]",
-        # get_radius="Delay_Minutos",
+        get_radius="Delay_Minutos",
         get_fill_color="color",
         get_line_color=[0, 0, 0],
     )
@@ -224,7 +254,6 @@ if uploaded_files:
     r = pdk.Deck(
         layers=[layer],
         initial_view_state=view_state,
-        # Balão (tooltip) atualizado com as datas formatadas
         tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
         map_style="mapbox://styles/mapbox/satellite-streets-v12",
     )
@@ -232,18 +261,12 @@ if uploaded_files:
     st.pydeck_chart(r)
     
     # --- TABELA DE DADOS ---
-    # --- TABELA DE DADOS ---
-    # --- TABELA DE DADOS ---
     st.subheader("Dados Críticos")
-    
-    # Criamos uma cópia só para a tabela para não estragar os dados originais
     df_tabela = df_mapa[['Fornecedor', 'Operação', 'Frota', 'Evento', 'Hora_alarme', 'Hora_chegada_alarme', 'Categoria_Delay', 'Delay_Minutos', 'Delay_Horas', 'Delay_Dias', 'Latitude', 'Longitude']].copy()
     
-    # Formatando as datas para o padrão brasileiro
     df_tabela['Hora_alarme'] = df_tabela['Hora_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     df_tabela['Hora_chegada_alarme'] = df_tabela['Hora_chegada_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     
-    # Exibindo a tabela ordenada
     st.dataframe(df_tabela.sort_values('Delay_Minutos', ascending=False))
 else:
     st.info("Aguardando upload da(s) planilha(s)...")
