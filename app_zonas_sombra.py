@@ -224,10 +224,21 @@ if uploaded_files:
 
     st.success(f"Mostrando no mapa: {len(df_com_coord)} eventos com coordenadas válidas. (Total na tabela: {len(df_mapa)})")
 
-    # --- MAPA INTERATIVO ---
+# --- MAPA INTERATIVO (Com Satélite Híbrido Gratuito) ---
     st.subheader("Mapa de Áreas Críticas")
     
-    layer = pdk.Layer(
+    # 1. Camada de Fundo: Google Maps Híbrido (Satélite + Rodovias e Nomes)
+    # Não precisa de chave de API!
+    camada_satelite = pdk.Layer(
+        "TileLayer",
+        data="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+    )
+    
+    # 2. Camada das Bolhas de Delay
+    camada_bolhas = pdk.Layer(
         "ScatterplotLayer",
         df_com_coord,
         pickable=True,
@@ -252,10 +263,10 @@ if uploaded_files:
     )
 
     r = pdk.Deck(
-        layers=[layer],
+        layers=[camada_satelite, camada_bolhas], # Satélite embaixo, bolhas por cima!
         initial_view_state=view_state,
         tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
-        map_style="mapbox://styles/mapbox/satellite-streets-v12",
+        map_style=None, # Desliga o fundo padrão para mostrar o Google Satélite
     )
 
     st.pydeck_chart(r)
