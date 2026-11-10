@@ -328,7 +328,7 @@ if uploaded_files:
     r = pdk.Deck(
         layers=[camada_satelite, camada_bolhas],
         initial_view_state=view_state,
-        tooltip={"text": "Fornecedor: {Fornecedor}\\nFrota: {Frota}\\nOperação: {Operação}\\nFaixa: {Categoria_Delay}\\nDelay: {Delay_Minutos} min\\nGerado em: {Data_Gerado}\\nChegou em: {Data_Chegada}"},
+        tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
         map_style=None,
     )
 
