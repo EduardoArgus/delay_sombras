@@ -442,6 +442,21 @@ if uploaded_files:
     df_tabela['Hora_alarme'] = df_tabela['Hora_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     df_tabela['Hora_chegada_alarme'] = df_tabela['Hora_chegada_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     
-    st.dataframe(df_tabela.sort_values('Delay_Minutos', ascending=False), use_container_width=True)
+    # Ordenar os dados antes de gerar o download e a tabela
+    df_tabela_ordenada = df_tabela.sort_values('Delay_Minutos', ascending=False)
+    
+    # Criar o ficheiro CSV em memória (compatível com Excel)
+    csv_tabela = df_tabela_ordenada.to_csv(index=False, sep=';', encoding='utf-8-sig')
+    
+    # Botão de download explícito
+    st.download_button(
+        label="📥 Baixar Tabela Completa (Excel/CSV)",
+        data=csv_tabela,
+        file_name="registro_eventos_zonas_sombra.csv",
+        mime="text/csv",
+    )
+    
+    # Exibir a tabela no ecrã
+    st.dataframe(df_tabela_ordenada, use_container_width=True)
 else:
     st.info("Aguardando upload da(s) planilha(s)...")
