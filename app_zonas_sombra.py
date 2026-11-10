@@ -93,7 +93,6 @@ if uploaded_files:
             else:
                 temp_df = pd.read_excel(file)
             
-            # Limpa espaços extras nos nomes das colunas
             temp_df.columns = temp_df.columns.str.strip()
             colunas = temp_df.columns.tolist()
             
@@ -118,7 +117,6 @@ if uploaded_files:
                 temp_df['Fornecedor'] = 'HAT-CLOUD'
                 
             elif 'Hora_chegada_alarme' in colunas or 'hora_chegada_alarme' in [c.lower() for c in colunas]:
-                # Padroniza variações de minúsculas/sem acento do PARGUS
                 mapa_pargus = {
                     'operacao': 'Operação',
                     'operação': 'Operação',
@@ -132,7 +130,6 @@ if uploaded_files:
                 temp_df = temp_df.rename(columns=lambda c: mapa_pargus.get(c.lower(), c))
                 temp_df['Fornecedor'] = 'PARGUS'
             
-            # Garante que todas as colunas oficiais existam para evitar KeyError
             colunas_oficiais = ['Fornecedor', 'Operação', 'Frota', 'Evento', 'Hora_alarme', 'Hora_chegada_alarme', 'Latitude', 'Longitude']
             for col in colunas_oficiais:
                 if col not in temp_df.columns:
@@ -142,16 +139,13 @@ if uploaded_files:
             
         df = pd.concat(df_list, ignore_index=True)
         
-        # Tratamento de Datas
         df['Hora_alarme'] = pd.to_datetime(df['Hora_alarme'], errors='coerce', dayfirst=True)
         df['Hora_chegada_alarme'] = pd.to_datetime(df['Hora_chegada_alarme'], errors='coerce', dayfirst=True)
         df = df.dropna(subset=['Hora_alarme', 'Hora_chegada_alarme'])
         
-        # Tratamento de Coordenadas (corrige números gigantes sem casa decimal)
         df['Latitude'] = df['Latitude'].apply(lambda x: corrigir_coordenada(x, 90))
         df['Longitude'] = df['Longitude'].apply(lambda x: corrigir_coordenada(x, 180))
         
-        # Cálculos de Delay (Minutos, Horas e Dias)
         df['Delay_Minutos'] = (df['Hora_chegada_alarme'] - df['Hora_alarme']).dt.total_seconds() / 60
         df['Delay_Minutos'] = df['Delay_Minutos'].astype(int)
         df['Delay_Horas'] = (df['Delay_Minutos'] / 60).round(1)
@@ -224,11 +218,9 @@ if uploaded_files:
 
     st.success(f"Mostrando no mapa: {len(df_com_coord)} eventos com coordenadas válidas. (Total na tabela: {len(df_mapa)})")
 
-# --- MAPA INTERATIVO (Com Satélite Híbrido Gratuito) ---
+    # --- MAPA INTERATIVO (Com Satélite Híbrido Gratuito) ---
     st.subheader("Mapa de Áreas Críticas")
     
-    # 1. Camada de Fundo: Google Maps Híbrido (Satélite + Rodovias e Nomes)
-    # Não precisa de chave de API!
     camada_satelite = pdk.Layer(
         "TileLayer",
         data="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
@@ -237,7 +229,6 @@ if uploaded_files:
         tile_size=256,
     )
     
-    # 2. Camada das Bolhas de Delay
     camada_bolhas = pdk.Layer(
         "ScatterplotLayer",
         df_com_coord,
@@ -263,21 +254,105 @@ if uploaded_files:
     )
 
     r = pdk.Deck(
-        layers=[camada_satelite, camada_bolhas], # Satélite embaixo, bolhas por cima!
+        layers=[camada_satelite, camada_bolhas],
         initial_view_state=view_state,
         tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
-        map_style=None, # Desliga o fundo padrão para mostrar o Google Satélite
+        map_style=None,
     )
 
     st.pydeck_chart(r)
+
+    # --- NOVAS TABELAS: RANKING DE VEÍCULOS E EVENTOS ---
+    st.divider()
+    st.subheader("📊 Ranking de Criticidade: Veículos e Eventos")
     
-    # --- TABELA DE DADOS ---
-    st.subheader("Dados Críticos")
+    cat_critica = todas_categorias[-1]
+    col_rank_veic, col_rank_ev = st.columns(2)
+    
+    with col_rank_veic:
+        st.markdown("**🚛 Veículos (Do Mais Crítico ao Mais Estável)**")
+        if not df_filtrado.empty:
+            rank_veiculos = df_filtrado.groupby(['Frota', 'Operação', 'Fornecedor'], as_index=False).agg(
+                Total_Eventos=('Delay_Minutos', 'count'),
+                Qtd_Criticos=('Categoria_Delay', lambda x: (x == cat_critica).sum()),
+                Media_Delay_Min=('Delay_Minutos', 'mean'),
+                Maior_Delay_Min=('Delay_Minutos', 'max')
+            )
+            rank_veiculos['Pct_Critico'] = (rank_veiculos['Qtd_Criticos'] / rank_veiculos['Total_Eventos'] * 100).round(1)
+            rank_veiculos['Media_Delay_Min'] = rank_veiculos['Media_Delay_Min'].round(1)
+            
+            rank_veiculos = rank_veiculos.sort_values(
+                by=['Qtd_Criticos', 'Pct_Critico', 'Media_Delay_Min'], 
+                ascending=[False, False, False]
+            )
+            
+            st.dataframe(
+                rank_veiculos,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Pct_Critico": st.column_config.ProgressColumn(
+                        "% Crítico",
+                        help="Porcentagem de eventos na faixa crítica",
+                        format="%.1f%%",
+                        min_value=0,
+                        max_value=100,
+                    ),
+                    "Total_Eventos": "Total",
+                    "Qtd_Criticos": "Críticos",
+                    "Media_Delay_Min": "Média (min)",
+                    "Maior_Delay_Min": "Máx (min)"
+                }
+            )
+        else:
+            st.info("Sem dados para exibir.")
+
+    with col_rank_ev:
+        st.markdown("**⚠️ Tipos de Evento (Do Mais Crítico ao Mais Estável)**")
+        if not df_filtrado.empty:
+            rank_eventos = df_filtrado.groupby(['Evento', 'Fornecedor'], as_index=False).agg(
+                Total_Eventos=('Delay_Minutos', 'count'),
+                Qtd_Criticos=('Categoria_Delay', lambda x: (x == cat_critica).sum()),
+                Media_Delay_Min=('Delay_Minutos', 'mean'),
+                Maior_Delay_Min=('Delay_Minutos', 'max')
+            )
+            rank_eventos['Pct_Critico'] = (rank_eventos['Qtd_Criticos'] / rank_eventos['Total_Eventos'] * 100).round(1)
+            rank_eventos['Media_Delay_Min'] = rank_eventos['Media_Delay_Min'].round(1)
+            
+            rank_eventos = rank_eventos.sort_values(
+                by=['Qtd_Criticos', 'Pct_Critico', 'Media_Delay_Min'], 
+                ascending=[False, False, False]
+            )
+            
+            st.dataframe(
+                rank_eventos,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Pct_Critico": st.column_config.ProgressColumn(
+                        "% Crítico",
+                        help="Porcentagem de eventos na faixa crítica",
+                        format="%.1f%%",
+                        min_value=0,
+                        max_value=100,
+                    ),
+                    "Total_Eventos": "Total",
+                    "Qtd_Criticos": "Críticos",
+                    "Media_Delay_Min": "Média (min)",
+                    "Maior_Delay_Min": "Máx (min)"
+                }
+            )
+        else:
+            st.info("Sem dados para exibir.")
+
+    # --- TABELA DE DADOS GERAIS ---
+    st.divider()
+    st.subheader("📋 Registro Geral de Eventos (Filtrados pelo Mapa)")
     df_tabela = df_mapa[['Fornecedor', 'Operação', 'Frota', 'Evento', 'Hora_alarme', 'Hora_chegada_alarme', 'Categoria_Delay', 'Delay_Minutos', 'Delay_Horas', 'Delay_Dias', 'Latitude', 'Longitude']].copy()
     
     df_tabela['Hora_alarme'] = df_tabela['Hora_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     df_tabela['Hora_chegada_alarme'] = df_tabela['Hora_chegada_alarme'].dt.strftime('%d/%m/%Y %H:%M:%S')
     
-    st.dataframe(df_tabela.sort_values('Delay_Minutos', ascending=False))
+    st.dataframe(df_tabela.sort_values('Delay_Minutos', ascending=False), use_container_width=True)
 else:
     st.info("Aguardando upload da(s) planilha(s)...")
