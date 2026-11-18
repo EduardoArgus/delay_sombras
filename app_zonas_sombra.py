@@ -290,7 +290,7 @@ if uploaded_files:
 
     st.success(f"Mostrando no mapa: {len(df_com_coord)} eventos com coordenadas válidas. (Total na tabela: {len(df_mapa)})")
 
-    # --- MAPA INTERATIVO (Com Satélite Híbrido Gratuito) ---
+# --- MAPA INTERATIVO (Google Híbrido: Satélite + Rodovias) ---
     st.subheader("Mapa de Áreas Críticas")
     
     camada_satelite = pdk.Layer(
@@ -325,10 +325,12 @@ if uploaded_files:
         pitch=0,
     )
 
+    tooltip_texto = "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"
+
     r = pdk.Deck(
         layers=[camada_satelite, camada_bolhas],
         initial_view_state=view_state,
-        tooltip={"text": "Fornecedor: {Fornecedor}\nFrota: {Frota}\nOperação: {Operação}\nFaixa: {Categoria_Delay}\nDelay: {Delay_Minutos} min\nGerado em: {Data_Gerado}\nChegou em: {Data_Chegada}"},
+        tooltip={"text": tooltip_texto},
         map_style=None,
     )
 
